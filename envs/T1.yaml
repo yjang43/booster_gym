@@ -9,9 +9,9 @@ basic:
 
 env:
   num_envs: 4096
-  num_observations: 47
+  num_observations: 80
   num_privileged_obs: 14
-  num_actions: 12
+  num_actions: 23
   env_spacing: 1.  # not used with plane terrain
 
 runner:
@@ -57,8 +57,8 @@ sim:
     contact_collection: 1 # 0: CC_NEVER (don't collect contact info), 1: CC_LAST_SUBSTEP (collect only contacts on last substep), 2: CC_ALL_SUBSTEPS (broken - do not use!)
 
 asset:
-  file: "resources/T1/T1_locomotion.urdf"
-  mujoco_file: "resources/T1/T1_locomotion.xml"
+  file: "resources/T1/T1_serial.urdf"
+  mujoco_file: "resources/T1/T1_serial.xml"
   name: "T1"
   base_name: "Trunk"
   foot_names: ["left_foot_link", "right_foot_link"]
@@ -86,11 +86,21 @@ init_state:
   rot: [0.0, 0.0, 0.0, 1.0] # x,y,z,w [quat]
   lin_vel: [0.0, 0.0, 0.0]  # x,y,z [m/s]
   ang_vel: [0.0, 0.0, 0.0]  # x,y,z [rad/s]
-  default_joint_angles: {"Hip_Pitch": -0.2, "Knee_Pitch": 0.4, "Ankle_Pitch": -0.25, "default": 0.} # target angles when action = 0.0
+  default_joint_angles: {
+    "Hip_Pitch": -0.2,
+    "Knee_Pitch": 0.4,
+    "Ankle_Pitch": -0.25,
+    "Left_Shoulder_Pitch": 0.20,
+    "Left_Shoulder_Roll": -1.40,
+    "Left_Elbow_Yaw": -0.5,
+    "Right_Shoulder_Pitch": 0.20,
+    "Right_Shoulder_Roll": 1.40,
+    "Right_Elbow_Yaw": 0.5,
+    "default": 0.} # target angles when action = 0.0
 
 control:
-  stiffness: {"Hip": 200., "Knee": 200., "Ankle": 50.} # [N*m/rad]
-  damping: {"Hip": 5., "Knee": 5., "Ankle": 1.} # [N*m*s/rad]
+  stiffness: {"Hip": 200., "Knee": 200., "Ankle": 50., "Head": 20., "Shoulder": 20., "Elbow": 20., "Waist": 200.} # [N*m/rad]
+  damping: {"Hip": 5., "Knee": 5., "Ankle": 1., "Head": 2., "Shoulder": 2., "Elbow": 2., "Waist": 2.} # [N*m*s/rad]
   action_scale: 1.
   decimation: 10
 
