@@ -107,6 +107,18 @@ class T1(BaseTask):
             self.feet_indices[i] = indices
             self.foot_shape_indices += list(range(rbs_list[indices].start, rbs_list[indices].start + rbs_list[indices].count))
 
+        # NOTE: Get indices of upper body joints.
+        # self.upper_body_dof_indices = torch.zeros(len(asset_cfg["upper_body_dof_names"]), dtype=torch.long, device=self.device)
+        # for i in range(len(asset_cfg["upper_body_dof_names"])):
+        #     indices = self.gym.find_asset_rigid_body_index(robot_asset, asset_cfg["upper_body_dof_names"][i])
+        #     self.upper_body_dof_indices[i] = indices
+        self.upper_body_dof_indices = torch.zeros(len(asset_cfg["upper_body_dof_names"]), dtype=torch.long, device=self.device)
+        for i in range(len(asset_cfg["upper_body_dof_names"])):
+            joint_index = self.gym.find_asset_dof_index(robot_asset, asset_cfg["upper_body_dof_names"][i])
+            self.upper_body_dof_indices[i] = joint_index
+
+
+
         base_init_state_list = (
             self.cfg["init_state"]["pos"] + self.cfg["init_state"]["rot"] + self.cfg["init_state"]["lin_vel"] + self.cfg["init_state"]["ang_vel"]
         )

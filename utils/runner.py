@@ -25,7 +25,7 @@ class Runner:
         self._update_cfg_from_args()
         self._set_seed()
         task_class = eval(self.cfg["basic"]["task"])
-        self.env = task_class(self.cfg)
+        self.env: T1 = task_class(self.cfg)
 
         self.device = self.cfg["basic"]["rl_device"]
         self.learning_rate = self.cfg["algorithm"]["learning_rate"]
@@ -33,7 +33,9 @@ class Runner:
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         self._load()
 
-        self.buffer = ExperienceBuffer(self.cfg["runner"]["horizon_length"], self.env.num_envs, self.device)
+        self._load_motion()
+
+        self.buffer = ExperienceBuffer(self.motion_len, self.env.num_envs, self.device)
         self.buffer.add_buffer("actions", (self.env.num_actions,))
         self.buffer.add_buffer("obses", (self.env.num_obs,))
         self.buffer.add_buffer("privileged_obses", (self.env.num_privileged_obs,))
@@ -96,19 +98,59 @@ class Runner:
         except Exception as e:
             print(f"Failed to load optimizer: {e}")
 
+    def _load_motion(self):
+        filepath = self.cfg["motion"]["file"]
+        if not filepath:
+            raise ValueError("No motion file provided.")
+        import pickle
+        with open(filepath, "rb") as f:
+            motion = pickle.load(f)
+        motion = motion[next(iter(motion))]
+
+        for k in motion:
+            if isinstance(motion[k], np.ndarray):
+                motion[k] = torch.from_numpy(motion[k]).float().to(self.device)
+
+        # Convert absolute joint positions to action space (relative to default)
+        # motion["dof"] is now absolute positions, convert to actions
+        motion["dof"] = (motion["dof"] - self.env.default_dof_pos) / self.cfg["control"]["action_scale"]
+
+        self.motion = motion
+        self.motion_fps = self.cfg["motion"]["fps"]
+
+        # Adjust motion length to match control frequency
+        control_dt = self.cfg["control"]["decimation"] * self.cfg["sim"]["dt"]
+        motion_dt = 1.0 / self.motion_fps
+        motion_time_scale = motion_dt / control_dt
+        self.motion_len = int(motion["dof"].shape[0] * motion_time_scale)
+
     def train(self):
+        # Calculate motion time step based on FPS mismatch
+        control_dt = self.env.dt  # This already includes decimation
+        motion_dt = 1.0 / self.motion_fps
+        motion_time_scale = motion_dt / control_dt
+
         self.recorder = Recorder(self.cfg)
         obs, infos = self.env.reset()
         obs = obs.to(self.device)
         privileged_obs = infos["privileged_obs"].to(self.device)
         for it in range(self.cfg["basic"]["max_iterations"]):
             # within horizon_length, env.step() is called with same act
-            for n in range(self.cfg["runner"]["horizon_length"]):
+            for n in range(self.motion_len):
                 self.buffer.update_data("obses", n, obs)
                 self.buffer.update_data("privileged_obses", n, privileged_obs)
                 with torch.no_grad():
                     dist = self.model.act(obs)
-                    act = dist.sample()
+                    # NOTE: Update mean values of upper body.
+                    modified_mean = dist.mean.clone()
+
+                    # Calculate corresponding motion frame based on time scaling
+                    motion_frame = min(int(n / motion_time_scale), self.motion["dof"].shape[0] - 1)
+                    modified_mean[:, self.env.upper_body_dof_indices] = self.motion["dof"][motion_frame: motion_frame+1, self.env.upper_body_dof_indices]
+
+                    # Create new distribution with modified mean
+                    modified_dist = torch.distributions.Normal(modified_mean, dist.stddev)
+                    act = modified_dist.sample()
                 obs, rew, done, infos = self.env.step(act)
                 obs, rew, done = obs.to(self.device), rew.to(self.device), done.to(self.device)
                 privileged_obs = infos["privileged_obs"].to(self.device)

@@ -6,6 +6,7 @@ basic:
   rl_device: "cuda:0" # device for the RL algorithm
   seed: 42 # seed - set to -1 to choose random seed
   description: ""
+  motion: ""
 
 env:
   num_envs: 4096
@@ -62,6 +63,18 @@ asset:
   name: "T1"
   base_name: "Trunk"
   foot_names: ["left_foot_link", "right_foot_link"]
+  upper_body_dof_names:
+    - "AAHead_yaw"
+    - "Head_pitch"
+    - "Left_Shoulder_Pitch"
+    - "Left_Shoulder_Roll"
+    - "Left_Elbow_Pitch"
+    - "Left_Elbow_Yaw"
+    - "Right_Shoulder_Pitch"
+    - "Right_Shoulder_Roll"
+    - "Right_Elbow_Pitch"
+    - "Right_Elbow_Yaw"
+    - "Waist"
   disable_gravity: false
   default_dof_drive_mode: 3 # see GymDofDriveModeFlags (0 is none, 1 is pos tgt, 2 is vel tgt, 3 effort)
   collapse_fixed_joints: true # bug: if collapse_fixed_joints = false, foot doesn't collide with ground
@@ -299,3 +312,7 @@ rewards:
   soft_torque_limit: 1.
   swing_period: 0.2
   feet_distance_ref: 0.2
+
+motion:
+  file: "motion/sbu_short_t1.pkl"
+  fps: 30
