@@ -3,6 +3,7 @@ import time
 import yaml
 import logging
 import threading
+import pickle
 
 from booster_robotics_sdk_python import (
     ChannelFactory,
@@ -38,6 +39,7 @@ class Controller:
 
         self._init_timer()
         self._init_low_state_values()
+        self._init_motion()
         self._init_communication()
         self.publish_runner = None
         self.running = True
@@ -58,6 +60,20 @@ class Controller:
         self.dof_target = np.zeros(B1JointCnt, dtype=np.float32)
         self.filtered_dof_target = np.zeros(B1JointCnt, dtype=np.float32)
         self.dof_pos_latest = np.zeros(B1JointCnt, dtype=np.float32)
+
+    def _init_motion(self):
+        motion_file = self.cfg["motion"]["file"]
+        self.motion_fps = self.cfg["motion"]["fps"]
+        with open(motion_file, "rb") as f:
+            self.motion_data = pickle.load(f)
+
+        # Calculate motion time scale to handle frequency mismatch
+        control_dt = self.cfg["common"]["dt"] * self.cfg["policy"]["control"]["decimation"]
+        motion_dt = 1.0 / self.motion_fps
+        self.motion_time_scale = motion_dt / control_dt
+
+        self.motion_step = 0
+        self.upper_body_indices = list(range(11))
 
     def _init_communication(self) -> None:
         try:
@@ -149,7 +165,7 @@ class Controller:
         self.logger.debug(f"Next start time: {self.next_inference_time}")
         start_time = time.perf_counter()
 
-        self.dof_target[:] = self.policy.inference(
+        policy_targets = self.policy.inference(
             time_now=time_now,
             dof_pos=self.dof_pos,
             dof_vel=self.dof_vel,
@@ -159,6 +175,17 @@ class Controller:
             vy=self.remoteControlService.get_vy_cmd(),
             vyaw=self.remoteControlService.get_vyaw_cmd(),
         )
+
+        # Override upper body joints with motion data
+        motion_frame = np.clip(
+            int(self.motion_step / self.motion_time_scale),
+            0,
+            len(self.motion_data) - 1
+        )
+        policy_targets[self.upper_body_indices] = self.motion_data[motion_frame][self.upper_body_indices]
+        self.motion_step += 1
+
+        self.dof_target[:] = policy_targets
 
         inference_time = time.perf_counter()
         self.logger.debug(f"Inference took {(inference_time - start_time)*1000:.4f} ms")

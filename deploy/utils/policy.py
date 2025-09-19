@@ -8,6 +8,7 @@ class Policy:
             self.cfg = cfg
             self.policy = torch.jit.load(self.cfg["policy"]["policy_path"])
             self.policy.eval()
+            self.num_actions = self.cfg["policy"]["num_actions"]
         except Exception as e:
             print(f"Failed to load policy: {e}")
             raise
@@ -57,9 +58,9 @@ class Policy:
         )
         self.obs[9] = np.cos(2 * np.pi * self.gait_process) * (self.gait_frequency > 1.0e-8)
         self.obs[10] = np.sin(2 * np.pi * self.gait_process) * (self.gait_frequency > 1.0e-8)
-        self.obs[11:23] = (dof_pos - self.default_dof_pos)[11:] * self.cfg["policy"]["normalization"]["dof_pos"]
-        self.obs[23:35] = dof_vel[11:] * self.cfg["policy"]["normalization"]["dof_vel"]
-        self.obs[35:47] = self.actions
+        self.obs[11:11+self.num_actions] = (dof_pos - self.default_dof_pos) * self.cfg["policy"]["normalization"]["dof_pos"]
+        self.obs[11+self.num_actions:11+2*self.num_actions] = dof_vel * self.cfg["policy"]["normalization"]["dof_vel"]
+        self.obs[11+2*self.num_actions:11+3*self.num_actions] = self.actions
 
         self.actions[:] = self.policy(torch.from_numpy(self.obs).unsqueeze(0)).detach().numpy()
         self.actions[:] = np.clip(
@@ -68,6 +69,6 @@ class Policy:
             self.cfg["policy"]["normalization"]["clip_actions"],
         )
         self.dof_targets[:] = self.default_dof_pos
-        self.dof_targets[11:] += self.cfg["policy"]["control"]["action_scale"] * self.actions
+        self.dof_targets[:] += self.cfg["policy"]["control"]["action_scale"] * self.actions
 
         return self.dof_targets
