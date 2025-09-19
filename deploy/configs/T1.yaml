@@ -34,10 +34,17 @@ common:
   ]
 
 policy:
-  policy_path: "./models/T1.pt"
+  # policy_path: "./models/booster_gym_exp_1/model_9000.pt"
+  # policy_path: "./models/booster_gym_exp_knee/model_3000.pt"
+  policy_path: "./models/booster_gym_exp_ankle/model_3000.pt"
+  # policy_path: "./models/booster_gym_exp_hip/model_3000.pt"
   num_actions: 23
   num_observations: 80
   gait_frequency: 1
+  # upper_body_dof_indices: [ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10]
+  # upper_body_dof_indices: [ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 17, 14, 20]
+  upper_body_dof_indices: [0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 17, 14, 20, 12, 13, 18, 19]
+
 
   normalization:
     gravity: 1.0
@@ -55,7 +62,7 @@ mech:
   parallel_mech_indexes: [15, 16, 21, 22]
 
 motion:
-  file: "motion/sbu_short_t1.pkl"
+  file: "../motion/sbu_short_t1.pkl"
   fps: 30
 
 prepare:

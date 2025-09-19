@@ -4,6 +4,7 @@ import yaml
 import logging
 import threading
 import pickle
+import torch
 
 from booster_robotics_sdk_python import (
     ChannelFactory,
@@ -22,6 +23,10 @@ from utils.rotate import rotate_vector_inverse_rpy
 from utils.timer import TimerConfig, Timer
 from utils.policy import Policy
 
+
+UPPER_BODY_INDICES_HIP = [ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10]
+UPPER_BODY_INDICES_KNEE = [ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 17, 14, 20]
+UPPER_BODY_INDICES_ANKLE =  [0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10, 11, 17, 14, 20, 12, 13, 18, 19]
 
 class Controller:
     def __init__(self, cfg_file) -> None:
@@ -65,15 +70,25 @@ class Controller:
         motion_file = self.cfg["motion"]["file"]
         self.motion_fps = self.cfg["motion"]["fps"]
         with open(motion_file, "rb") as f:
-            self.motion_data = pickle.load(f)
+            motion = pickle.load(f)
+        motion = motion[next(iter(motion))]
 
+        # Keep motion data on CPU initially, will move to CUDA when accessed
+        # for k in motion:
+        #     if isinstance(motion[k], np.ndarray):
+        #         motion[k] = torch.from_numpy(motion[k]).float()
+
+        # Motion data is already in unnormalized absolute positions (same format as policy output)
+        self.motion = motion
+        self.motion_fps = self.cfg["motion"]["fps"]
         # Calculate motion time scale to handle frequency mismatch
         control_dt = self.cfg["common"]["dt"] * self.cfg["policy"]["control"]["decimation"]
         motion_dt = 1.0 / self.motion_fps
         self.motion_time_scale = motion_dt / control_dt
 
         self.motion_step = 0
-        self.upper_body_indices = list(range(11))
+        # self.upper_body_dof_indices = list(range(11))
+        self.upper_body_dof_indices = self.cfg["policy"]["upper_body_dof_indices"]
 
     def _init_communication(self) -> None:
         try:
@@ -133,6 +148,12 @@ class Controller:
         for i in range(B1JointCnt):
             self.dof_target[i] = self.low_cmd.motor_cmd[i].q
             self.filtered_dof_target[i] = self.low_cmd.motor_cmd[i].q
+        # policy_targets[self.upper_body_dof_indices] = self.motion["dof"][0][self.upper_body_dof_indices]
+        # for i in range(B1JointCnt):
+        # for i in self.upper_body_dof_indices:
+        #     self.dof_target[i] = self.motion["dof"][0][i]
+        #     self.filtered_dof_target[i] = self.motion["dof"][0][i]
+        #     self.low_cmd.motor_cmd[i].q = self.motion["dof"][0][i]
         self._send_cmd(self.low_cmd)
         send_time = time.perf_counter()
         self.logger.debug(f"Send cmd took {(send_time - start_time)*1000:.4f} ms")
@@ -174,15 +195,18 @@ class Controller:
             vx=self.remoteControlService.get_vx_cmd(),
             vy=self.remoteControlService.get_vy_cmd(),
             vyaw=self.remoteControlService.get_vyaw_cmd(),
+            last_dof_target=self.dof_target.copy()
         )
 
         # Override upper body joints with motion data
         motion_frame = np.clip(
             int(self.motion_step / self.motion_time_scale),
             0,
-            len(self.motion_data) - 1
+            len(self.motion["dof"]) - 1
         )
-        policy_targets[self.upper_body_indices] = self.motion_data[motion_frame][self.upper_body_indices]
+        policy_targets[self.upper_body_dof_indices] = self.motion["dof"][motion_frame][self.upper_body_dof_indices]
+        # policy_targets[self.upper_body_dof_indices] = self.motion["dof"][0][self.upper_body_dof_indices]
+        # policy_targets[self.upper_body_dof_indices] = np.array(self.cfg["common"]["default_qpos"], dtype=np.float32)[self.upper_body_dof_indices]
         self.motion_step += 1
 
         self.dof_target[:] = policy_targets
