@@ -9,6 +9,7 @@ import signal
 import imageio
 import torch
 import torch.nn.functional as F
+import pdb
 from utils.model import *
 from utils.buffer import ExperienceBuffer
 from utils.utils import discount_values, surrogate_loss
@@ -29,7 +30,8 @@ class Runner:
 
         self.device = self.cfg["basic"]["rl_device"]
         self.learning_rate = self.cfg["algorithm"]["learning_rate"]
-        self.model = ActorCritic(self.env.num_actions, self.env.num_obs, self.env.num_privileged_obs).to(self.device)
+        # self.model = ActorCritic(self.env.num_actions, self.env.num_obs, self.env.num_privileged_obs).to(self.device)
+        self.model = ActorCriticV2(self.env.num_actions, self.env.num_obs, self.env.num_privileged_obs, self.env.upper_body_dof_indices.tolist()).to(self.device)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         self._load()
 
@@ -137,6 +139,8 @@ class Runner:
         obs, infos = self.env.reset()
         obs = obs.to(self.device)
         privileged_obs = infos["privileged_obs"].to(self.device)
+
+        # try:
         for it in range(self.cfg["basic"]["max_iterations"]):
             # within horizon_length, env.step() is called with same act
             # Motion progression now handled automatically by environment
@@ -272,6 +276,10 @@ class Runner:
                     it + 1,
                 )
             print("epoch: {}/{}".format(it + 1, self.cfg["basic"]["max_iterations"]))
+        # except Exception as e:
+        #     import traceback
+        #     traceback.print_exc()
+        #     pdb.set_trace()
 
     def play(self):
         obs, infos = self.env.reset()
