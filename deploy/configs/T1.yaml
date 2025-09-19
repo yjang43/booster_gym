@@ -35,8 +35,8 @@ common:
 
 policy:
   policy_path: "./models/T1.pt"
-  num_actions: 12
-  num_observations: 47
+  num_actions: 23
+  num_observations: 80
   gait_frequency: 1
 
   normalization:
@@ -53,6 +53,10 @@ policy:
 
 mech:
   parallel_mech_indexes: [15, 16, 21, 22]
+
+motion:
+  file: "motion/sbu_short_t1.pkl"
+  fps: 30
 
 prepare:
   stiffness: [
