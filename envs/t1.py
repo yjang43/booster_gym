@@ -29,6 +29,7 @@ class T1(BaseTask):
         self.gym.prepare_sim(self.sim)
         self._init_buffers()
         self._prepare_reward_function()
+        self._load_motion()
 
     def _create_envs(self):
         self.num_envs = self.cfg["env"]["num_envs"]
@@ -246,7 +247,7 @@ class T1(BaseTask):
         self.delay_steps = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
         self.torques = torch.zeros(self.num_envs, self.num_dofs, dtype=torch.float, device=self.device)
         self.commands = torch.zeros(self.num_envs, self.cfg["commands"]["num_commands"], dtype=torch.float, device=self.device)
-        self.cmd_resample_time = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        # self.cmd_resample_time = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)  # Commented out - not needed for motion-based episodes
         self.gait_frequency = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self.gait_process = torch.zeros(self.num_envs, dtype=torch.float, device=self.device)
         self.base_lin_vel = quat_rotate_inverse(self.base_quat, self.root_states[:, 7:10])
@@ -282,6 +283,8 @@ class T1(BaseTask):
                     found = True
             if not found:
                 self.default_dof_pos[:, i] = self.cfg["init_state"]["default_joint_angles"]["default"]
+
+        # Motion-related buffers - using episode_length_buf for step counting
 
     def _prepare_reward_function(self):
         """Prepares a list of reward functions, whcih will be called to compute the total reward.
@@ -323,18 +326,79 @@ class T1(BaseTask):
         self.episode_length_buf[env_ids] = 0
         self.filtered_lin_vel[env_ids] = 0.0
         self.filtered_ang_vel[env_ids] = 0.0
-        self.cmd_resample_time[env_ids] = 0
+        # self.cmd_resample_time[env_ids] = 0  # Commented out - not needed for motion-based episodes
+
+        # Motion step counter now uses episode_length_buf (reset happens automatically)
 
         self.delay_steps[env_ids] = torch.randint(0, self.cfg["control"]["decimation"], (len(env_ids),), device=self.device)
         self.extras["time_outs"] = self.time_out_buf
 
     def _reset_dofs(self, env_ids):
+        # Set lower body DOFs to default positions with randomization
         self.dof_pos[env_ids] = apply_randomization(self.default_dof_pos, self.cfg["randomization"].get("init_dof_pos"))
+
+        # Set upper body DOFs to motion start frame (frame 0) without randomization
+        motion_start_dof = self.motion["dof"][0].to(self.device)
+        self.dof_pos[env_ids][:, self.upper_body_dof_indices] = motion_start_dof[self.upper_body_dof_indices]
+
         self.dof_vel[env_ids] = 0.0
         env_ids_int32 = env_ids.to(dtype=torch.int32)
         self.gym.set_dof_state_tensor_indexed(
             self.sim, gymtorch.unwrap_tensor(self.dof_state), gymtorch.unwrap_tensor(env_ids_int32), len(env_ids_int32)
         )
+
+    # def set_dof_positions(self, dof_positions):
+    #     self.dof_pos[:] = apply_randomization(dof_positions, self.cfg["randomization"].get("init_dof_pos"))
+    #     self.dof_vel[:] = 0.0
+    #     self.gym.set_dof_state_tensor(self.sim, gymtorch.unwrap_tensor(self.dof_state))
+
+    def _load_motion(self):
+        filepath = self.cfg["motion"]["file"]
+        if not filepath:
+            raise ValueError("No motion file provided.")
+        import pickle
+        with open(filepath, "rb") as f:
+            motion = pickle.load(f)
+        motion = motion[next(iter(motion))]
+
+        # Keep motion data on CPU initially, will move to CUDA when accessed
+        for k in motion:
+            if isinstance(motion[k], np.ndarray):
+                motion[k] = torch.from_numpy(motion[k]).float()
+
+        # Convert absolute joint positions to action space (relative to default)
+        # motion["dof"] is now absolute positions, convert to actions
+        motion["dof"] = (motion["dof"] - self.default_dof_pos.cpu()) / self.cfg["control"]["action_scale"]
+
+        self.motion = motion
+        self.motion_fps = self.cfg["motion"]["fps"]
+
+        # Adjust motion length to match control frequency
+        control_dt = self.cfg["control"]["decimation"] * self.cfg["sim"]["dt"]
+        motion_dt = 1.0 / self.motion_fps
+        self.motion_time_scale = motion_dt / control_dt
+        self.motion_len = int(motion["dof"].shape[0] * self.motion_time_scale)
+
+    def _apply_motion_override(self):
+        """Apply motion progression and override upper body actions with motion data"""
+        # Calculate current motion frame for each environment based on episode length and time scaling
+        # motion_time_scale accounts for dt mismatch between control frequency and motion frequency
+        self.motion_step = torch.clamp(
+            (self.episode_length_buf.float() / self.motion_time_scale).long(),
+            0,
+            self.motion["dof"].shape[0] - 1
+        )
+
+        # Get motion DOF values for current frame
+        motion_dof_frame = self.motion["dof"][self.motion_step.cpu()].to(self.device)
+
+        # Apply randomization to motion data similar to initial DOF positions
+        motion_dof_frame_randomized = apply_randomization(motion_dof_frame, self.cfg["randomization"].get("init_dof_pos"))
+
+        # Override upper body actions with randomized motion data
+        self.actions[:, self.upper_body_dof_indices] = motion_dof_frame_randomized[:, self.upper_body_dof_indices]
+
+        # episode_length_buf increments automatically in step() method
 
     def _reset_root_states(self, env_ids):
         self.root_states[env_ids] = self.base_init_state
@@ -372,33 +436,32 @@ class T1(BaseTask):
             self._refresh_feet_state()
 
     def _resample_commands(self):
-        env_ids = (self.episode_length_buf == self.cmd_resample_time).nonzero(as_tuple=False).flatten()
-        if len(env_ids) == 0:
-            return
-        if self.cfg["commands"]["curriculum"]:
-            self._resample_curriculum_commands(env_ids)
-        else:
-            self.commands[env_ids, 0] = torch_rand_float(
-                self.cfg["commands"]["lin_vel_x"][0], self.cfg["commands"]["lin_vel_x"][1], (len(env_ids), 1), device=self.device
-            ).squeeze(1)
-            self.commands[env_ids, 1] = torch_rand_float(
-                self.cfg["commands"]["lin_vel_y"][0], self.cfg["commands"]["lin_vel_y"][1], (len(env_ids), 1), device=self.device
-            ).squeeze(1)
-            self.commands[env_ids, 2] = torch_rand_float(
-                self.cfg["commands"]["ang_vel_yaw"][0], self.cfg["commands"]["ang_vel_yaw"][1], (len(env_ids), 1), device=self.device
-            ).squeeze(1)
-        self.gait_frequency[env_ids] = torch_rand_float(
-            self.cfg["commands"]["gait_frequency"][0], self.cfg["commands"]["gait_frequency"][1], (len(env_ids), 1), device=self.device
-        ).squeeze(1)
-        still_envs = env_ids[torch.randperm(len(env_ids))[: int(self.cfg["commands"]["still_proportion"] * len(env_ids))]]
-        self.commands[still_envs, :] = 0.0
-        self.gait_frequency[still_envs] = 0.0
-        self.cmd_resample_time[env_ids] += torch.randint(
-            int(self.cfg["commands"]["resampling_time_s"][0] / self.dt),
-            int(self.cfg["commands"]["resampling_time_s"][1] / self.dt),
-            (len(env_ids),),
-            device=self.device,
-        )
+        # Command resampling disabled for motion-following tasks
+        # Motion sequence defines movement, so velocity commands should remain zero (standing)
+        return
+
+        # # Original command resampling logic - commented out
+        # env_ids = (self.episode_length_buf == self.cmd_resample_time).nonzero(as_tuple=False).flatten()
+        # if len(env_ids) == 0:
+        #     return
+        # if self.cfg["commands"]["curriculum"]:
+        #     self._resample_curriculum_commands(env_ids)
+        # else:
+        #     self.commands[env_ids, 0] = torch_rand_float(
+        #         self.cfg["commands"]["lin_vel_x"][0], self.cfg["commands"]["lin_vel_x"][1], (len(env_ids), 1), device=self.device
+        #     ).squeeze(1)
+        #     self.commands[env_ids, 1] = torch_rand_float(
+        #         self.cfg["commands"]["lin_vel_y"][0], self.cfg["commands"]["lin_vel_y"][1], (len(env_ids), 1), device=self.device
+        #     ).squeeze(1)
+        #     self.commands[env_ids, 2] = torch_rand_float(
+        #         self.cfg["commands"]["ang_vel_yaw"][0], self.cfg["commands"]["ang_vel_yaw"][1], (len(env_ids), 1), device=self.device
+        #     ).squeeze(1)
+        # self.gait_frequency[env_ids] = torch_rand_float(
+        #     self.cfg["commands"]["gait_frequency"][0], self.cfg["commands"]["gait_frequency"][1], (len(env_ids), 1), device=self.device
+        # ).squeeze(1)
+        # still_envs = env_ids[torch.randperm(len(env_ids))[: int(self.cfg["commands"]["still_proportion"] * len(env_ids))]]
+        # self.commands[still_envs, :] = 0.0
+        # self.gait_frequency[still_envs] = 0.0
 
     def _update_curriculum(self, env_ids):
         if not self.cfg["commands"]["curriculum"]:
@@ -449,6 +512,10 @@ class T1(BaseTask):
     def step(self, actions):
         # pre physics step
         self.actions[:] = torch.clip(actions, -self.cfg["normalization"]["clip_actions"], self.cfg["normalization"]["clip_actions"])
+
+        # Apply motion progression and override upper body actions
+        self._apply_motion_override()
+
         dof_targets = self.default_dof_pos + self.cfg["control"]["action_scale"] * self.actions
 
         # perform physics step
@@ -567,7 +634,12 @@ class T1(BaseTask):
         self.reset_buf |= self.base_pos[:, 2] - self.terrain.terrain_heights(self.base_pos) < self.cfg["rewards"]["terminate_height"]
         self.time_out_buf = self.episode_length_buf > np.ceil(self.cfg["rewards"]["episode_length_s"] / self.dt)
         self.reset_buf |= self.time_out_buf
-        self.time_out_buf |= self.episode_length_buf == self.cmd_resample_time
+        # self.time_out_buf |= self.episode_length_buf == self.cmd_resample_time  # Commented out - not needed for motion-based episodes
+
+        # Motion completion termination - episodes end when motion sequence completes
+        # Simple approach: compare episode_length_buf directly against scaled motion length
+        motion_completed = self.episode_length_buf >= (self.motion_len - 1)
+        self.time_out_buf |= motion_completed
 
     def _compute_reward(self):
         """Compute rewards

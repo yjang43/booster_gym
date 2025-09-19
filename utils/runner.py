@@ -25,7 +25,7 @@ class Runner:
         self._update_cfg_from_args()
         self._set_seed()
         task_class = eval(self.cfg["basic"]["task"])
-        self.env: T1 = task_class(self.cfg)
+        self.env = task_class(self.cfg)
 
         self.device = self.cfg["basic"]["rl_device"]
         self.learning_rate = self.cfg["algorithm"]["learning_rate"]
@@ -33,9 +33,9 @@ class Runner:
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=self.learning_rate)
         self._load()
 
-        self._load_motion()
+        # self._load_motion()  # Motion loading now handled by environment
 
-        self.buffer = ExperienceBuffer(self.motion_len, self.env.num_envs, self.device)
+        self.buffer = ExperienceBuffer(self.cfg["runner"]["horizon_length"], self.env.num_envs, self.device)
         self.buffer.add_buffer("actions", (self.env.num_actions,))
         self.buffer.add_buffer("obses", (self.env.num_obs,))
         self.buffer.add_buffer("privileged_obses", (self.env.num_privileged_obs,))
@@ -98,37 +98,40 @@ class Runner:
         except Exception as e:
             print(f"Failed to load optimizer: {e}")
 
-    def _load_motion(self):
-        filepath = self.cfg["motion"]["file"]
-        if not filepath:
-            raise ValueError("No motion file provided.")
-        import pickle
-        with open(filepath, "rb") as f:
-            motion = pickle.load(f)
-        motion = motion[next(iter(motion))]
+    # def _load_motion(self):
+    #     # Motion loading now handled by environment
+    #     filepath = self.cfg["motion"]["file"]
+    #     if not filepath:
+    #         raise ValueError("No motion file provided.")
+    #     import pickle
+    #     with open(filepath, "rb") as f:
+    #         motion = pickle.load(f)
+    #     motion = motion[next(iter(motion))]
 
-        for k in motion:
-            if isinstance(motion[k], np.ndarray):
-                motion[k] = torch.from_numpy(motion[k]).float().to(self.device)
+    #     # Keep motion data on CPU initially, will move to CUDA when accessed
+    #     for k in motion:
+    #         if isinstance(motion[k], np.ndarray):
+    #             motion[k] = torch.from_numpy(motion[k]).float()
 
-        # Convert absolute joint positions to action space (relative to default)
-        # motion["dof"] is now absolute positions, convert to actions
-        motion["dof"] = (motion["dof"] - self.env.default_dof_pos) / self.cfg["control"]["action_scale"]
+    #     # Convert absolute joint positions to action space (relative to default)
+    #     # motion["dof"] is now absolute positions, convert to actions
+    #     motion["dof"] = (motion["dof"] - self.env.default_dof_pos.cpu()) / self.cfg["control"]["action_scale"]
 
-        self.motion = motion
-        self.motion_fps = self.cfg["motion"]["fps"]
+    #     self.motion = motion
+    #     self.motion_fps = self.cfg["motion"]["fps"]
 
-        # Adjust motion length to match control frequency
-        control_dt = self.cfg["control"]["decimation"] * self.cfg["sim"]["dt"]
-        motion_dt = 1.0 / self.motion_fps
-        motion_time_scale = motion_dt / control_dt
-        self.motion_len = int(motion["dof"].shape[0] * motion_time_scale)
+    #     # Adjust motion length to match control frequency
+    #     control_dt = self.cfg["control"]["decimation"] * self.cfg["sim"]["dt"]
+    #     motion_dt = 1.0 / self.motion_fps
+    #     motion_time_scale = motion_dt / control_dt
+    #     self.motion_len = int(motion["dof"].shape[0] * motion_time_scale)
 
     def train(self):
-        # Calculate motion time step based on FPS mismatch
-        control_dt = self.env.dt  # This already includes decimation
-        motion_dt = 1.0 / self.motion_fps
-        motion_time_scale = motion_dt / control_dt
+        # Motion handling now moved to environment
+        # # Calculate motion time step based on FPS mismatch
+        # control_dt = self.env.dt  # This already includes decimation
+        # motion_dt = 1.0 / self.motion_fps
+        # motion_time_scale = motion_dt / control_dt
 
         self.recorder = Recorder(self.cfg)
         obs, infos = self.env.reset()
@@ -136,21 +139,35 @@ class Runner:
         privileged_obs = infos["privileged_obs"].to(self.device)
         for it in range(self.cfg["basic"]["max_iterations"]):
             # within horizon_length, env.step() is called with same act
-            for n in range(self.motion_len):
+            # Motion progression now handled automatically by environment
+            # # within horizon_length, env.step() is called with same act
+            # # motion_start_frame = torch.randint(0, self.motion["dof"].shape[0] - self.cfg["runner"]["horizon_length"], (self.env.num_envs,))
+
+            # # Set initial DOF positions to match motion start frame
+            # initial_dof_positions = self.motion["dof"][motion_start_frame].to(self.device)
+            # # self.env.set_dof_positions(initial_dof_positions)
+
+            # for n in range(self.motion_len):
+            for n in range(self.cfg["runner"]["horizon_length"]):
+
                 self.buffer.update_data("obses", n, obs)
                 self.buffer.update_data("privileged_obses", n, privileged_obs)
                 with torch.no_grad():
                     dist = self.model.act(obs)
-                    # NOTE: Update mean values of upper body.
-                    modified_mean = dist.mean.clone()
+                    # Motion override now handled automatically by environment
+                    # # NOTE: Update mean values of upper body.
+                    # modified_mean = dist.mean.clone()
 
-                    # Calculate corresponding motion frame based on time scaling
-                    motion_frame = min(int(n / motion_time_scale), self.motion["dof"].shape[0] - 1)
-                    modified_mean[:, self.env.upper_body_dof_indices] = self.motion["dof"][motion_frame: motion_frame+1, self.env.upper_body_dof_indices]
+                    # # # Calculate corresponding motion frame based on time scaling
+                    # # motion_frame = motion_start_frame + min(int(n / motion_time_scale), self.motion["dof"].shape[0] - 1)
+                    # # # Load motion to CUDA when accessed at motion_frame
+                    # # motion_dof_frame = self.motion["dof"][motion_frame][:, self.env.upper_body_dof_indices.cpu()].to(self.device)
+                    # # modified_mean[:, self.env.upper_body_dof_indices] = motion_dof_frame
 
-                    # Create new distribution with modified mean
-                    modified_dist = torch.distributions.Normal(modified_mean, dist.stddev)
-                    act = modified_dist.sample()
+                    # # Create new distribution with modified mean
+                    # modified_dist = torch.distributions.Normal(modified_mean, dist.stddev)
+                    # act = modified_dist.sample()
+                    act = dist.sample()
                 obs, rew, done, infos = self.env.step(act)
                 obs, rew, done = obs.to(self.device), rew.to(self.device), done.to(self.device)
                 privileged_obs = infos["privileged_obs"].to(self.device)

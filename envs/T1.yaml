@@ -301,7 +301,7 @@ rewards:
     feet_swing: 3.
   episode_length_s: 30.
   terminate_height: 0.45
-  terminate_vel: 50.
+  terminate_vel: 100.
   terminate_contacts_on: []
   penalize_contacts_on: ["Trunk", "H1", "H2", "AL", "AR", "Waist", "Hip", "Shank", "Ankle"]
   only_positive_rewards: true # if true negative total rewards are clipped at zero (avoids early termination problems)
