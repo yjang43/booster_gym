@@ -143,23 +143,42 @@ class Controller:
             if self.remoteControlService.start_custom_mode():
                 break
             time.sleep(0.1)
-        start_time = time.perf_counter()
+        method_start = time.perf_counter()
+
+        # Time create_prepare_cmd
+        t0 = time.perf_counter()
         create_prepare_cmd(self.low_cmd, self.cfg)
+        t1 = time.perf_counter()
+        print(f"  create_prepare_cmd took {(t1 - t0)*1000:.4f} ms")
+
+        # Time target initialization
+        t0 = time.perf_counter()
         for i in range(B1JointCnt):
             self.dof_target[i] = self.low_cmd.motor_cmd[i].q
             self.filtered_dof_target[i] = self.low_cmd.motor_cmd[i].q
+        t1 = time.perf_counter()
+        print(f"  target initialization took {(t1 - t0)*1000:.4f} ms")
+
         # policy_targets[self.upper_body_dof_indices] = self.motion["dof"][0][self.upper_body_dof_indices]
         # for i in range(B1JointCnt):
         # for i in self.upper_body_dof_indices:
         #     self.dof_target[i] = self.motion["dof"][0][i]
         #     self.filtered_dof_target[i] = self.motion["dof"][0][i]
         #     self.low_cmd.motor_cmd[i].q = self.motion["dof"][0][i]
+
+        # Time _send_cmd
+        t0 = time.perf_counter()
         self._send_cmd(self.low_cmd)
-        send_time = time.perf_counter()
-        self.logger.debug(f"Send cmd took {(send_time - start_time)*1000:.4f} ms")
+        t1 = time.perf_counter()
+        print(f"  _send_cmd took {(t1 - t0)*1000:.4f} ms")
+
+        # Time ChangeMode
+        t0 = time.perf_counter()
         self.client.ChangeMode(RobotMode.kCustom)
-        end_time = time.perf_counter()
-        self.logger.debug(f"Change mode took {(end_time - send_time)*1000:.4f} ms")
+        t1 = time.perf_counter()
+        print(f"  ChangeMode(kCustom) took {(t1 - t0)*1000:.4f} ms")
+
+        print(f"  TOTAL start_custom_mode took {(time.perf_counter() - method_start)*1000:.4f} ms")
 
     def start_rl_gait_conditionally(self):
         print(f"{self.remoteControlService.get_rl_gait_operation_hint()}")
@@ -167,14 +186,37 @@ class Controller:
             if self.remoteControlService.start_rl_gait():
                 break
             time.sleep(0.1)
+        method_start = time.perf_counter()
+
+        # Time create_first_frame_rl_cmd
+        t0 = time.perf_counter()
         create_first_frame_rl_cmd(self.low_cmd, self.cfg)
+        t1 = time.perf_counter()
+        print(f"  create_first_frame_rl_cmd took {(t1 - t0)*1000:.4f} ms")
+
+        # Time _send_cmd
+        t0 = time.perf_counter()
         self._send_cmd(self.low_cmd)
+        t1 = time.perf_counter()
+        print(f"  _send_cmd took {(t1 - t0)*1000:.4f} ms")
+
+        # Time timer updates
+        t0 = time.perf_counter()
         self.next_inference_time = self.timer.get_time()
         self.next_publish_time = self.timer.get_time()
+        t1 = time.perf_counter()
+        print(f"  timer updates took {(t1 - t0)*1000:.4f} ms")
+
+        # Time thread creation and start
+        t0 = time.perf_counter()
         self.publish_runner = threading.Thread(target=self._publish_cmd)
         self.publish_runner.daemon = True
         self.publish_runner.start()
-        print(f"{self.remoteControlService.get_operation_hint()}")
+        t1 = time.perf_counter()
+        print(f"  thread creation and start took {(t1 - t0)*1000:.4f} ms")
+
+        print(f"  TOTAL start_rl_gait took {(time.perf_counter() - method_start)*1000:.4f} ms")
+        # print(f"{self.remoteControlService.get_operation_hint()}")
 
     def run(self):
         time_now = self.timer.get_time()
@@ -192,9 +234,12 @@ class Controller:
             dof_vel=self.dof_vel,
             base_ang_vel=self.base_ang_vel,
             projected_gravity=self.projected_gravity,
-            vx=self.remoteControlService.get_vx_cmd(),
-            vy=self.remoteControlService.get_vy_cmd(),
-            vyaw=self.remoteControlService.get_vyaw_cmd(),
+            # vx=self.remoteControlService.get_vx_cmd(),
+            # vy=self.remoteControlService.get_vy_cmd(),
+            # vyaw=self.remoteControlService.get_vyaw_cmd(),
+            vx=0.0,
+            vy=0.0,
+            vyaw=0.0,
             last_dof_target=self.dof_target.copy()
         )
 
@@ -204,6 +249,11 @@ class Controller:
             0,
             len(self.motion["dof"]) - 1
         )
+
+        if motion_frame >= len(self.motion["dof"]) - 1:
+            self.running = False
+            self.client.ChangeMode(RobotMode.kPrepare)
+
         policy_targets[self.upper_body_dof_indices] = self.motion["dof"][motion_frame][self.upper_body_dof_indices]
         # policy_targets[self.upper_body_dof_indices] = self.motion["dof"][0][self.upper_body_dof_indices]
         # policy_targets[self.upper_body_dof_indices] = np.array(self.cfg["common"]["default_qpos"], dtype=np.float32)[self.upper_body_dof_indices]
@@ -276,13 +326,20 @@ if __name__ == "__main__":
     with Controller(cfg_file) as controller:
         time.sleep(2)  # Wait for channels to initialize
         print("Initialization complete.")
+        debug_t1 = time.perf_counter()
         controller.start_custom_mode_conditionally()
+        print(f"Start custom mode took {(time.perf_counter() - debug_t1)*1000:.4f} ms")
+        input("Press enter to start")
+        print("start")
+        debug_t2 = time.perf_counter()
         controller.start_rl_gait_conditionally()
+        print(f"Start custom mode took {(time.perf_counter() - debug_t2)*1000:.4f} ms")
+        
 
         try:
             while controller.running:
                 controller.run()
-            controller.client.ChangeMode(RobotMode.kDamping)
+            controller.client.ChangeMode(RobotMode.kWalking)
         except KeyboardInterrupt:
             print("\nKeyboard interrupt received. Cleaning up...")
             controller.cleanup()
