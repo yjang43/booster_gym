@@ -40,8 +40,8 @@ class RemoteControlService:
             self._start_joystick_thread()
         except Exception as e:
             print(f"{e}, downgrade to keyboard control")
-            self._init_keyboard_control()
-            self._start_keyboard_thread()
+        # self._init_keyboard_control()
+        # self._start_keyboard_thread()
 
         self.vx = 0.0
         self.vy = 0.0

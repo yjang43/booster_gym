@@ -5,6 +5,7 @@ import numpy as np
 import evdev
 from dataclasses import dataclass
 from utils.remote_control_service import RemoteControlService, JoystickConfig
+from utils.command import create_prepare_cmd, create_first_frame_rl_cmd
 from deploy import Controller
 from booster_robotics_sdk_python import (
     ChannelFactory,
@@ -20,21 +21,6 @@ from booster_robotics_sdk_python import (
 
 ChannelFactory.Instance().Init(0)
 
-controller = Controller("configs/T1.yaml")
-
-
-lock = threading.Lock()
-
-start_time = time.perf_counter()
-
-dance_time = 60*3 + 8.415
-# key_marks = [52.932, 55.244, 57.142, 59.165]
-key_marks = [52.932, 55.244, 57.142, 59.165]
-delay_times = [dance_time - km for km in key_marks]
-delay_times = [35, 30, 25]
-
-timers = []
-
 
 def comm_thread(func):
     @functools.wraps(func)
@@ -44,13 +30,35 @@ def comm_thread(func):
     return wrapper
 
 
+class ControllerForDance(Controller):
+
+    def start_custom_mode_conditionally(self):
+        create_prepare_cmd(self.low_cmd, self.cfg)
+        for i in range(B1JointCnt):
+            self.dof_target[i] = self.low_cmd.motor_cmd[i].q
+            self.filtered_dof_target[i] = self.low_cmd.motor_cmd[i].q
+        self._send_cmd(self.low_cmd)
+        self.client.ChangeMode(RobotMode.kCustom)
+
+    def start_rl_gait_conditionally(self):
+        create_first_frame_rl_cmd(self.low_cmd, self.cfg)
+        self._send_cmd(self.low_cmd)
+        self.publish_runner = threading.Thread(target=self._publish_cmd)
+        self.publish_runner.daemon = True
+        self.publish_runner.start()
+
+
 @dataclass
 class JoystickConfigForDance(JoystickConfig):
-    dance_button: evdev.ecodes = evdev.ecodes.BTN_0 # TODO: change to different button.
+    dance_button: evdev.ecodes = evdev.ecodes.BTN_B # TODO: change to different button.
 
 class RemoteControlServiceForDance(RemoteControlService):
 
-    def _init_keyboard_control(self):
+    def __init__(self, config=None):
+        self.released = True
+
+
+    def _init_keyboard_control(self, remote_control_service):
         super()._init_keyboard_control()
         self.keybaord_dance = False
 
@@ -61,11 +69,35 @@ class RemoteControlServiceForDance(RemoteControlService):
 
     def start_dance(self) -> bool:
         if hasattr(self, "joystick") and getattr(self, "joystick") != None:
-            return self.joystick.active_keys() == [self.config.dance_button]
-        return self.keybaord_dance
+            pressed = self.joystick.active_keys() == [self.config.dance_button]
+            return pressed
+            if pressed:
+                res = self.released
+                self.released = False
+                return res
+            else:
+                self.released = True
+
+        # return self.keybaord_dance
+        input()
+
+controller = ControllerForDance("configs/T1.yaml")
 
 
-remote_control_service = RemoteControlServiceForDance()
+lock = threading.Lock()
+
+start_time = time.perf_counter()
+
+dance_time = 60*3 + 8.415
+# key_marks = [52.932, 55.244, 57.142, 59.165]
+key_marks = [52.932, 55.244, 57.142, 59.165]
+delay_times = [dance_time - km for km in key_marks]
+delay_times = [5]
+# delay_times = [1]
+
+timers = []
+
+remote_control_service = RemoteControlServiceForDance(JoystickConfigForDance)
 
 
 def get_elapsed_time():
@@ -76,12 +108,12 @@ def collect_timing_cues():
     cue_times = []
 
     for i in range(num_cues):
-        print(f"Press Enter for cue {i+1}/{num_cues} (delay: {delay_times[i]}s): ")
-        while True:
-            if remote_control_service.start_dance():
-                remote_control_service.keybaord_dance = False
-                break
-            time.sleep(0.1)
+        input(f"Press Enter for cue {i+1}/{num_cues} (delay: {delay_times[i]}s): ")
+        # while True:
+        #     if remote_control_service.start_dance():
+        #         remote_control_service.keybaord_dance = False
+        #         break
+        #     time.sleep(0.1)
         current_time = get_elapsed_time()
         cue_time = current_time + delay_times[i]
         cue_times.append(cue_time)
@@ -110,6 +142,7 @@ def calculate_consensus_timing(cue_times):
 def comm_dance():
     print("current time:", get_elapsed_time())
     print("🕺 DANCING... 🕺")
+    controller.next_inference_time = controller.timer.get_time()
     controller.start_rl_gait_conditionally()
     while controller.running:
         controller.run()
@@ -150,8 +183,10 @@ if __name__ == "__main__":
 
     cue_times = collect_timing_cues()
     consensus_time = calculate_consensus_timing(cue_times)
-    schedule_task(consensus_time - 22, comm_prepare_mode)
-    schedule_task(consensus_time - 20, comm_get_up)
+    # schedule_task(consensus_time - 22, comm_prepare_mode)
+    # schedule_task(consensus_time - 20, comm_get_up)
+    # schedule_task(consensus_time -3, comm_prepare_mode)
+    schedule_task(consensus_time - 5, comm_prepare_mode)
     schedule_task(consensus_time - 2, comm_custom_mode)
     schedule_task(consensus_time, comm_dance)
 

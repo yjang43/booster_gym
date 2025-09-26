@@ -105,9 +105,9 @@ class Controller:
             raise
 
     def _low_state_handler(self, low_state_msg: LowState):
-        if abs(low_state_msg.imu_state.rpy[0]) > 1.0 or abs(low_state_msg.imu_state.rpy[1]) > 1.0:
-            self.logger.warning("IMU base rpy values are too large: {}".format(low_state_msg.imu_state.rpy))
-            self.running = False
+        # if abs(low_state_msg.imu_state.rpy[0]) > 1.0 or abs(low_state_msg.imu_state.rpy[1]) > 1.0:
+        #     self.logger.warning("IMU base rpy values are too large: {}".format(low_state_msg.imu_state.rpy))
+        #     self.running = False
         self.timer.tick_timer_if_sim()
         time_now = self.timer.get_time()
         for i, motor in enumerate(low_state_msg.motor_state_serial):
@@ -254,6 +254,7 @@ class Controller:
             self.running = False
             self.client.ChangeMode(RobotMode.kPrepare)
 
+        policy_targets = np.zeros_like(policy_targets)
         policy_targets[self.upper_body_dof_indices] = self.motion["dof"][motion_frame][self.upper_body_dof_indices]
         # policy_targets[self.upper_body_dof_indices] = self.motion["dof"][0][self.upper_body_dof_indices]
         # policy_targets[self.upper_body_dof_indices] = np.array(self.cfg["common"]["default_qpos"], dtype=np.float32)[self.upper_body_dof_indices]
