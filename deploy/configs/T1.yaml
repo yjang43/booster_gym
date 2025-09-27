@@ -42,7 +42,8 @@ policy:
   # policy_path: "./models/booster_gym_v3/model_200.pt"
   # policy_path: "./models/booster_gym_v4/model_1000.pt"
   # policy_path: "./models/booster_gym_v4/model_4000.pt"
-  policy_path: "./models/booster_gym_v5/model_15000.pt"
+  # policy_path: "./models/booster_gym_v5/model_15000.pt"
+  policy_path: "./models/booster_gym_v5/model_98000.pt"
   # policy_path: "./models/booster_gym_exp_hip/model_3000.pt"
   num_actions: 23
   num_observations: 80

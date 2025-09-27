@@ -18,22 +18,7 @@ from booster_robotics_sdk_python import (
 )
 
 
-ChannelFactory.Instance().Init(0)
-
-controller = Controller("configs/T1.yaml")
-
-
 lock = threading.Lock()
-
-start_time = time.perf_counter()
-
-dance_time = 3*60 + 8.415
-# key_marks = [52.932, 55.244, 57.142, 59.165]
-key_marks = [52.932, 55.244, 57.142, 59.165] + [1*60 + 42.5] + [2*60 + 1.953, 2*60 + 3.907, 2*60 + 5.931, 2*60 + 8.08]
-delay_times = [dance_time - km for km in key_marks]
-# delay_times = [35, 30, 25]
-
-timers = []
 
 
 def comm_thread(func):
@@ -64,7 +49,6 @@ class RemoteControlServiceForDance(RemoteControlService):
         return self.keybaord_dance
 
 
-remote_control_service = RemoteControlServiceForDance(JoystickConfigForDance)
 
 
 def get_elapsed_time():
@@ -146,6 +130,15 @@ def schedule_task(target_time, task_func, *task_func_args):
 
 
 if __name__ == "__main__":
+    ChannelFactory.Instance().Init(0)
+    controller = Controller("configs/T1.yaml")
+    remote_control_service = RemoteControlServiceForDance(JoystickConfigForDance)
+    start_time = time.perf_counter()
+
+    dance_time = 3*60 + 8.415
+    key_marks = [52.932, 55.244, 57.142, 59.165] + [1*60 + 42.5] + [2*60 + 1.953, 2*60 + 3.907, 2*60 + 5.931, 2*60 + 8.08]
+    delay_times = [dance_time - km for km in key_marks]
+    timers = []
 
     cue_times = collect_timing_cues()
     consensus_time = calculate_consensus_timing(cue_times)
