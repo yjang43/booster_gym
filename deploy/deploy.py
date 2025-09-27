@@ -252,9 +252,9 @@ class Controller:
 
         if motion_frame >= len(self.motion["dof"]) - 1:
             self.running = False
-            self.client.ChangeMode(RobotMode.kPrepare)
+            # self.client.ChangeMode(RobotMode.kPrepare)
 
-        policy_targets = np.zeros_like(policy_targets)
+        # policy_targets = np.zeros_like(policy_targets)
         policy_targets[self.upper_body_dof_indices] = self.motion["dof"][motion_frame][self.upper_body_dof_indices]
         # policy_targets[self.upper_body_dof_indices] = self.motion["dof"][0][self.upper_body_dof_indices]
         # policy_targets[self.upper_body_dof_indices] = np.array(self.cfg["common"]["default_qpos"], dtype=np.float32)[self.upper_body_dof_indices]

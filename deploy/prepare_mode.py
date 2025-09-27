@@ -7,17 +7,25 @@ from booster_robotics_sdk_python import (
 from deploy import Controller
 
 
-def set_prepare_mode(controller):
+def set_prepare_mode(client):
     """Set the robot to prepare mode"""
     print("Setting robot to prepare mode...")
-    controller.client.ChangeMode(RobotMode.kPrepare)
+    client.ChangeMode(RobotMode.kPrepare)
     print("Robot is now in prepare mode")
+
+def set_damp_mode(client):
+    """Set the robot to damping mode"""
+    print("Setting robot to damping mode...")
+    client.ChangeMode(RobotMode.kDamping)
+    print("Robot is now in damping mode")
 
 
 if __name__ == "__main__":
     # Initialize communication
     ChannelFactory.Instance().Init(0)
-    controller = Controller("configs/T1.yaml")
+    time.sleep(2)
+    client = B1LocoClient()
+    client.Init()
 
     print("Robot prepare mode script")
     print("Press Enter to set prepare mode, or 'q' + Enter to quit")
@@ -30,8 +38,12 @@ if __name__ == "__main__":
                 print("Exiting...")
                 break
 
-            # Set prepare mode
-            set_prepare_mode(controller)
+            if user_input == "d":
+                set_damp_mode(client)
+
+            else:
+                # Set prepare mode
+                set_prepare_mode(client)
 
         except KeyboardInterrupt:
             print("\nExiting...")

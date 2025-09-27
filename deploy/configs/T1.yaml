@@ -72,7 +72,8 @@ mech:
 motion:
   # file: "../motion/sbu_short_t1.pkl"
   # file: "../motion/ys.pkl"
-  file: "../motion/merged.pkl"
+  # file: "../motion/merged.pkl"
+  file: "../motion/merged_fixed.pkl"
   fps: 30
 
 prepare:

@@ -35,11 +35,11 @@ class RemoteControlService:
         self.config = config or JoystickConfig()
         self._lock = threading.Lock()
         self._running = True
-        try:
-            self._init_joystick()
-            self._start_joystick_thread()
-        except Exception as e:
-            print(f"{e}, downgrade to keyboard control")
+        # try:
+        #     self._init_joystick()
+        #     self._start_joystick_thread()
+        # except Exception as e:
+        #     print(f"{e}, downgrade to keyboard control")
         # self._init_keyboard_control()
         # self._start_keyboard_thread()
 
