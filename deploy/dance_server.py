@@ -1,0 +1,324 @@
+# Calude, make this into a http server. Every user call for /input api will act the same as pressing enter.
+
+
+import time
+import threading
+import functools
+import numpy as np
+import evdev
+import json
+from http.server import HTTPServer, BaseHTTPRequestHandler
+from urllib.parse import urlparse, parse_qs
+from dataclasses import dataclass
+from utils.remote_control_service import RemoteControlService, JoystickConfig
+from utils.command import create_prepare_cmd, create_first_frame_rl_cmd
+from deploy import Controller
+from booster_robotics_sdk_python import (
+    ChannelFactory,
+    B1LocoClient,
+    B1LowCmdPublisher,
+    B1LowStateSubscriber,
+    LowCmd,
+    LowState,
+    B1JointCnt,
+    RobotMode,
+    GetModeResponse
+)
+
+
+# Global state for timing collection
+class TimingState:
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.active = False
+        self.current_cue = 0
+        self.total_cues = 0
+        self.cue_times = []
+        self.delay_times = []
+        self.start_time = None
+        self.consensus_time = None
+        self.scheduled = False
+
+timing_state = TimingState()
+
+lock = threading.Lock()
+gm = GetModeResponse()
+
+
+# HTTP Request Handler
+class DanceServerHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        parsed_path = urlparse(self.path)
+        path = parsed_path.path
+
+        if path == '/status':
+            self._send_json_response({
+                'active': timing_state.active,
+                'current_cue': timing_state.current_cue,
+                'total_cues': timing_state.total_cues,
+                'cues_collected': len(timing_state.cue_times),
+                'scheduled': timing_state.scheduled
+            })
+        elif path == '/cues':
+            self._send_json_response({
+                'cue_times': timing_state.cue_times,
+                'delay_times': timing_state.delay_times,
+                'consensus_time': timing_state.consensus_time
+            })
+        else:
+            self._send_error(404, 'Not Found')
+
+    def do_POST(self):
+        parsed_path = urlparse(self.path)
+        path = parsed_path.path
+
+        if path == '/start':
+            timing_state.reset()
+            timing_state.active = True
+            timing_state.total_cues = len(delay_times)
+            timing_state.delay_times = delay_times.copy()
+            timing_state.start_time = get_elapsed_time()
+            self._send_json_response({'message': 'Timing collection started', 'total_cues': timing_state.total_cues})
+
+        elif path == '/input':
+            if not timing_state.active:
+                self._send_error(400, 'Timing collection not active. Call /start first.')
+                return
+
+            if timing_state.current_cue >= timing_state.total_cues:
+                self._send_error(400, 'All cues already collected')
+                return
+
+            # Record the timing cue (equivalent to pressing Enter)
+            current_time = get_elapsed_time()
+            cue_time = current_time + timing_state.delay_times[timing_state.current_cue]
+            timing_state.cue_times.append(cue_time)
+            timing_state.current_cue += 1
+
+            response = {
+                'message': f'Cue {timing_state.current_cue}/{timing_state.total_cues} recorded',
+                'delay': timing_state.delay_times[timing_state.current_cue - 1],
+                'cue_time': cue_time
+            }
+
+            # If all cues collected, calculate consensus and schedule
+            if timing_state.current_cue >= timing_state.total_cues:
+                timing_state.consensus_time = calculate_consensus_timing(timing_state.cue_times)
+                schedule_dance_sequence()
+                timing_state.scheduled = True
+                response['consensus_time'] = timing_state.consensus_time
+                response['message'] += ' - Dance sequence scheduled!'
+
+            self._send_json_response(response)
+
+        else:
+            self._send_error(404, 'Not Found')
+
+    def _send_json_response(self, data):
+        self.send_response(200)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
+
+    def _send_error(self, code, message):
+        self.send_response(code)
+        self.send_header('Content-type', 'application/json')
+        self.end_headers()
+        self.wfile.write(json.dumps({'error': message}).encode())
+
+
+def comm_thread(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        with lock:
+            return func(*args, **kwargs)
+    return wrapper
+
+
+class ControllerForDance(Controller):
+
+    def start_custom_mode_conditionally(self):
+        create_prepare_cmd(self.low_cmd, self.cfg)
+        for i in range(B1JointCnt):
+            self.dof_target[i] = self.low_cmd.motor_cmd[i].q
+            self.filtered_dof_target[i] = self.low_cmd.motor_cmd[i].q
+        self._send_cmd(self.low_cmd)
+        self.client.ChangeMode(RobotMode.kCustom)
+
+    def start_rl_gait_conditionally(self):
+        create_first_frame_rl_cmd(self.low_cmd, self.cfg)
+        self._send_cmd(self.low_cmd)
+        self.publish_runner = threading.Thread(target=self._publish_cmd)
+        self.publish_runner.daemon = True
+        self.publish_runner.start()
+
+
+@dataclass
+class JoystickConfigForDance(JoystickConfig):
+    dance_button: evdev.ecodes = evdev.ecodes.BTN_B # TODO: change to different button.
+
+class RemoteControlServiceForDance(RemoteControlService):
+
+    def __init__(self, config=None):
+        self.released = True
+
+    def _init_keyboard_control(self, remote_control_service):
+        super()._init_keyboard_control()
+        self.keybaord_dance = False
+
+    def _handle_keyboard_press(self, key):
+        super()._handle_keyboard_press(key)
+        if key == "z":
+            self.keybaord_dance = True
+
+    def start_dance(self) -> bool:
+        if hasattr(self, "joystick") and getattr(self, "joystick") != None:
+            pressed = self.joystick.active_keys() == [self.config.dance_button]
+            return pressed
+            if pressed:
+                res = self.released
+                self.released = False
+                return res
+            else:
+                self.released = True
+
+        # return self.keybaord_dance
+        input()
+
+def ensure_mode_change(client, mode):
+    while not client.ChangeMode(mode):
+        time.sleep(0.01)
+        pass
+    # client.GetMode(gm)
+    # while gm.mode != mode:
+    #     client.ChangeMode(mode)
+    #     client.GetMode(gm)
+
+def get_elapsed_time():
+    return time.perf_counter() - start_time
+
+def schedule_dance_sequence():
+    """Schedule the dance sequence based on consensus timing"""
+    consensus_time = timing_state.consensus_time
+    schedule_task(consensus_time - 18, comm_prepare_mode)
+    schedule_task(consensus_time - 12, comm_get_up)
+    schedule_task(consensus_time - 3, comm_prepare_mode)
+    schedule_task(consensus_time - 2, comm_custom_mode)
+    schedule_task(consensus_time, comm_dance)
+
+def collect_timing_cues():
+    """Legacy function - now replaced by HTTP API"""
+    num_cues = len(delay_times)
+    cue_times = []
+
+    for i in range(num_cues):
+        input(f"Press Enter for cue {i+1}/{num_cues} (delay: {delay_times[i]}s): ")
+        current_time = get_elapsed_time()
+        cue_time = current_time + delay_times[i]
+        cue_times.append(cue_time)
+
+    return cue_times
+
+def calculate_consensus_timing(cue_times):
+    if len(cue_times) == 1:
+        return cue_times[0]
+
+    accum_intervals = delay_times[0] - np.array(delay_times)
+    cue_times = np.array(cue_times)
+
+    errors = []
+    for ref_idx, ref_time in enumerate(cue_times):
+        offsets = accum_intervals[ref_idx] - accum_intervals
+        expected_times = ref_time + offsets
+        total_error = np.sum(np.abs(cue_times - expected_times))
+        errors.append(total_error)
+
+    best_idx = np.argmin(errors)
+    return cue_times[best_idx]
+
+
+@comm_thread
+def comm_dance():
+    print("current time:", get_elapsed_time())
+    print("🕺 DANCING... 🕺")
+    controller.next_inference_time = controller.timer.get_time()
+    controller.start_rl_gait_conditionally()
+    while controller.running:
+        controller.run()
+    print("Dance done")
+    ensure_mode_change(controller.client, RobotMode.kPrepare)
+    ensure_mode_change(controller.client, RobotMode.kWalking)
+
+@comm_thread
+def comm_get_up():
+    print("current time:", get_elapsed_time())
+    print("🚶 GETTING UP... 🚶")
+    controller.client.GetUp()
+
+@comm_thread
+def comm_prepare_mode():
+    print("current time:", get_elapsed_time())
+    print("Prepare mode")
+    # controller.client.ChangeMode(RobotMode.kPrepare)
+    ensure_mode_change(controller.client, RobotMode.kPrepare)
+
+@comm_thread
+def comm_custom_mode():
+    print("current time:", get_elapsed_time())
+    print("Custom mode")
+    controller.start_custom_mode_conditionally()
+
+def schedule_task(target_time, task_func, *task_func_args):
+    current_time = get_elapsed_time()
+    delay = target_time - current_time
+
+    print(f"Scheduling {task_func.__name__} at {target_time:.3f}s (current: {current_time:.3f}s, delay: {delay:.3f}s)")
+
+    if delay > 0:
+        timer = threading.Timer(delay, task_func, args=task_func_args)
+        timer.start()
+        timers.append(timer)
+    else:
+        task_func(*task_func_args)
+
+
+if __name__ == "__main__":
+    # Initialize robot controller
+    ChannelFactory.Instance().Init(0)
+    controller = ControllerForDance("configs/T1.yaml")
+    remote_control_service = RemoteControlServiceForDance(JoystickConfigForDance)
+    start_time = time.perf_counter()
+
+    # Dance timing configuration
+    dance_time = 3*60 + 8.415
+    key_marks = [52.932, 55.244, 57.142, 59.165] + [1*60 + 42.5] + [2*60 + 1.953, 2*60 + 3.907, 2*60 + 5.931, 2*60 + 8.08]
+    delay_times = [dance_time - km for km in key_marks]
+    timers = []
+
+    # Start HTTP server
+    print("Starting Dance HTTP Server...")
+    print("API Endpoints:")
+    print("  POST /start - Start timing collection")
+    print("  POST /input - Record timing cue (replaces pressing Enter)")
+    print("  GET /status - Get current state")
+    print("  GET /cues - View collected cues")
+    print()
+
+    server = HTTPServer(('localhost', 8080), DanceServerHandler)
+    print("Server running on http://localhost:8080")
+    print("Use POST /start to begin, then POST /input for each timing cue")
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nShutting down server...")
+        server.shutdown()
+
+        # Clean up any running timers
+        for timer in timers:
+            if timer.is_alive():
+                timer.cancel()
+
+    
