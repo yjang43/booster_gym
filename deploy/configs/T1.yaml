@@ -44,8 +44,11 @@ policy:
   # policy_path: "./models/booster_gym_v4/model_4000.pt"
   # policy_path: "./models/booster_gym_v5/model_15000.pt"
   policy_path: "./models/booster_gym_v5/model_98000.pt"
+  # policy_path: "./models/booster_gym_v4/model_100000.pt"
+  # policy_path: "./models/booster_gym_v5/model_98000.pt"
   # policy_path: "./models/booster_gym_exp_hip/model_3000.pt"
   num_actions: 23
+  # num_observations: 80
   num_observations: 80
   gait_frequency: 1
   # upper_body_dof_indices: [ 0,  1,  2,  3,  4,  5,  6,  7,  8,  9, 10]

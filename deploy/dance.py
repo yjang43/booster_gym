@@ -184,7 +184,7 @@ if __name__ == "__main__":
     dance_time = 3*60 + 8.415
     key_marks = [52.932, 55.244, 57.142, 59.165] + [1*60 + 42.5] + [2*60 + 1.953, 2*60 + 3.907, 2*60 + 5.931, 2*60 + 8.08]
     delay_times = [dance_time - km for km in key_marks]
-    # delay_times = [3, 2, 1]
+    # delay_times = [3]
     timers = []
 
     cue_times = collect_timing_cues()
